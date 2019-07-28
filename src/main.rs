@@ -1,3 +1,5 @@
+#![allow(unused_imports, unused_variables, dead_code)]
+
 use specs::prelude::*;
 use specs::shred::{Accessor, AccessorCow, CastFrom, DynamicSystemData, MetaTable, Read, Resource,
                    ResourceId, Resources,
@@ -6,146 +8,140 @@ use specs::shred::cell::{Ref, RefMut};
 use std::ops::Deref;
 use std::collections::HashMap;
 use std::panic::resume_unwind;
-use crate::other::{DynRegister, fetch_serializable_by_string};
+use crate::other::{DynRegister, fetch_serializable_by_string, test_dyn_component};
+use std::process::Command;
+use specs::storage::{AnyStorage, MaskedStorage};
+use crate::serialize::{Serialize, Id};
+use specs::world::EntitiesRes;
+use std::marker::PhantomData;
+use std::fmt::Debug;
 
 mod other;
+mod serialize;
+mod fake_system;
 
 fn main() {
     let mut world = World::new();
-    let mut meta_table = MetaTable::<Serialize>::new();
-    let mut resource_table = ResourceTable::new();
+    let meta_serialize_table: MetaTable<Serialize> = MetaTable::new();
+    let resource_table = ResourceTable::new();
 
     world.add_resource(resource_table);
-    world.add_resource(meta_table);
+    world.add_resource(meta_serialize_table);
+    world.register::<Tile>();
+    world.register::<Hill>();
+
+    world.create_entity().with(Tile { x: 4 }).with(Hill { y: 9 }).build();
+    world.create_entity().with(Tile { x: 1 }).build();
+    world.create_entity().with(Hill { y: 1 }).build();
+
+    world.dyn_register_component::<Hill>("Hill");
+
+    silly_join(&mut world);
+
+    test_dyn_component(&mut world.res);
+
+
     world.dyn_register(Id(54), "Id");
     world.dyn_register((), "Unit");
-
-//    let mut dispatch = DispatcherBuilder::new()
-//        .with(FakeSystem {
-//            dependencies: Dependencies {
-//                reads: vec![
-//                    resource_table.get("Id"),
-//                    resource_table.get("Unit"),
-//                ],
-//                writes: vec![],
-//            }
-//        }, "fakesystem", &[])
-//        .build();
-
 
     let serializables = fetch_serializable_by_string(
         &["Id", "Unit"],
         &world.res,
         |s| s.to_wire_format(),
     );
-    serializables.iter().for_each(|s| { dbg!(s); });
+    serializables.iter()
+                 .for_each(|s| { dbg!(s); });
 
-    //dispatch.dispatch(&world.res);
-}
 
-struct FakeSystemData<'a> {
-    meta_table: Read<'a, MetaTable<Serialize>>,
-    reads: Vec<Ref<'a, Box<Resource + 'static>>>,
-    writes: Vec<RefMut<'a, Box<Resource + 'static>>>,
-}
+    /*
+    {
+        let (meta, res_table): (ReadExpect<MetaTable<AnyStorage>>, ReadExpect<ResourceTable>) = SystemData::fetch(&world.res);
+        let reads = &["Tile", "Hill"];
 
-impl<'a> DynamicSystemData<'a> for FakeSystemData<'a> {
-    type Accessor = Dependencies;
-
-    fn setup(_accessor: &Self::Accessor, _res: &mut Resources) {}
-
-    fn fetch(accessor: &Dependencies, res: &'a Resources) -> Self {
-        let reads = accessor
-            .reads
-            .iter()
-            .map(|id| id.0)
-            .map(|id| res
-                .try_fetch_internal(id)
-                .expect("bug: the requested resource does not exist")
-                .borrow()
-            )
-            .collect();
-        let writes = accessor
-            .writes
-            .iter()
-            .map(|id| id.0)
-            .map(|id| res
-                .try_fetch_internal(id)
+        let xs = reads
+            .into_iter()
+            .map(|&s| res_table.get(s))
+            .map(|id| &world.res
+                .try_fetch_internal(id.0)
                 .expect("bug: the requested resource does not exist")
                 .borrow_mut()
-            )
-            .collect();
+            ).collect::<Vec<_>>();
 
-        FakeSystemData {
-            meta_table: SystemData::fetch(res),
-            reads,
-            writes,
-        }
+        xs.iter()
+          .map(Box::as_ref)
+          .map(|r| meta
+              .get(r)
+              .expect("Not in meta_table"))
+          .map(f)
+          .collect()
+    }*/
+}
+
+fn silly_join(world: &mut World) {
+    let (h, t): (ReadStorage<Hill>, ReadStorage<Tile>) = world.system_data();
+    let j = (&h, &t).join();
+}
+
+struct Query<'a> {
+    joins: &'a [&'a str],
+    keyed: &'a [usize],
+}
+
+impl<'a> Query<'a> {
+    fn new(joins: &'a [&str], keyed: &'a [usize]) -> Self {
+        Query { joins, keyed }
+    }
+
+    fn accept(res: &Resources) {
+        unimplemented!()
     }
 }
 
-struct Dependencies {
-    reads: Vec<ResourceId>,
-    writes: Vec<ResourceId>,
+#[derive(Debug)]
+struct Tile {
+    pub x: usize
 }
 
-impl Accessor for Dependencies {
-    fn try_new() -> Option<Self> {
-        // there's no default for this
-        None
-    }
-
-    fn reads(&self) -> Vec<ResourceId> {
-        let mut reads = self.reads.clone();
-        reads.push(ResourceId::new::<MetaTable<Serialize>>());
-        reads
-    }
-
-    fn writes(&self) -> Vec<ResourceId> {
-        self.writes.clone()
-    }
+#[derive(Debug)]
+struct Hill {
+    pub y: usize
 }
 
-trait Serialize {
+impl Serialize for Hill {
     fn to_wire_format(&self) -> String {
-        "fake json!!".to_owned()
+        self.y.to_string() + " is my hill's height"
     }
 }
 
-impl<T> CastFrom<T> for Serialize
-    where T: Serialize + 'static
-{
-    fn cast(t: &T) -> &Self { t }
-    fn cast_mut(t: &mut T) -> &mut Self { t }
+impl Component for Hill {
+    type Storage = specs::storage::VecStorage<Hill>;
 }
 
-struct FakeSystem {
-    dependencies: Dependencies
+impl Component for Tile {
+    type Storage = specs::storage::VecStorage<Tile>;
 }
 
-impl<'a> System<'a> for FakeSystem {
-    type SystemData = FakeSystemData<'a>;
+//impl<'e, T, D> Serialize for Storage<'e, T, D> {
+//    fn to_wire_format(&self) -> String {
+//        "constant".to_owned()
+//    }
+//}
 
-    fn run(&mut self, data: Self::SystemData) {
-        dbg!(data.reads.len());
-
-        let meta = data.meta_table;
-        data.reads.iter()
-            .map(|resource| {
-                meta.get(Box::as_ref(resource)).expect("Not registered in meta table")
-            })
-            .for_each(|s| { dbg!(s.to_wire_format()); });
+impl<T: Debug + Component + Serialize> Serialize for MaskedStorage<T> {
+        fn to_wire_format(&self) -> String {
+        "constant".to_owned()
     }
-
-    fn accessor<'b>(&'b self) -> AccessorCow<'a, 'b, Self> {
-        AccessorCow::Ref(&self.dependencies)
-    }
-
-    fn setup(&mut self, _res: &mut Resources) {
-        // this could call a setup function of the script
+    fn component(&self, res: &Resources)-> String {
+        let c = Storage::new(res.fetch(), self);
+        let mut s = String::new();
+        for x in c.join() {
+            dbg!(x);
+            s += " ";
+            s += &x.to_wire_format();
+        }
+        s
     }
 }
-
 
 struct ResourceTable {
     map: HashMap<String, ResourceId>
@@ -167,23 +163,3 @@ impl ResourceTable {
     }
 }
 
-#[derive(Debug)]
-struct Id(pub u8);
-
-//impl Id {
-//    pub fn say_hi(&self) -> String {
-//        self.0.to_string() + "you're nice!"
-//    }
-//}
-
-impl Serialize for Id {
-    fn to_wire_format(&self) -> String {
-        self.0.to_string() + ": is my id!!"
-    }
-}
-
-impl Serialize for () {
-    fn to_wire_format(&self) -> String {
-        "I'm a tuple!".to_owned()
-    }
-}

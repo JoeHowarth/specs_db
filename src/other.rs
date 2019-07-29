@@ -6,8 +6,11 @@ use specs::shred::{Fetch, FetchMut, Accessor, AccessorCow, CastFrom, DynamicSyst
 use specs::shred::cell::{Ref, RefMut};
 use crate::serialize::Serialize;
 use std::ops::{Deref, DerefMut};
-use specs::storage::MaskedStorage;
+use specs::storage::{MaskedStorage, UnprotectedStorage};
 use std::fmt::Debug;
+use std::marker::PhantomData;
+use core::borrow::BorrowMut;
+use hibitset::BitSetLike;
 
 
 pub trait DynRegister {
@@ -32,6 +35,7 @@ impl DynRegister for World {
     {
         self.register::<C>();
         self.res.fetch_mut::<MetaTable<Serialize>>().register(&*self.res.fetch::<MaskedStorage<C>>());
+        self.res.fetch_mut::<MetaTable<GivesBitSet>>().register(&*self.res.fetch::<MaskedStorage<C>>());
         self.res.fetch_mut::<ResourceTable>().register::<MaskedStorage<C>>(name);
     }
 }
@@ -58,16 +62,80 @@ pub fn fetch_serializable_by_string<T>(reads: &[&str], res: &Resources, f: fn(&S
 }
 
 pub fn test_dyn_component(res: &mut Resources) -> String {
-    let table: Fetch<ResourceTable> = res.fetch::<ResourceTable>();
+    let table = res.fetch::<ResourceTable>();
+    let meta = res.fetch::<MetaTable<Serialize>>();
+
     let hill = table.get("Hill");
     let r = res.try_fetch_internal(hill.0)
                .expect("bug dyn")
                .borrow_mut();
     let r1 = r.as_ref();
-    let meta = res.fetch::<MetaTable<Serialize>>();
-    let s = meta.get(r1).expect("bug dyn 2");
-    dbg!(s.component(res))
+    let t = meta.get(r1).expect("bug dyn 2");
+    dbg!(t.component(res))
 }
+
+pub fn test_dyn_join(res: &mut Resources) {
+    let table = res.fetch::<ResourceTable>();
+    let meta = res.fetch::<MetaTable<GivesBitSet>>();
+    let vec = ["Hill", "Tile"].iter().map(|&s| {
+        res.try_fetch_internal(table.get(s).0)
+           .expect("bug")
+           .borrow_mut()
+    }).collect::<Vec<_>>();
+    let vec2 = vec.iter().map(|r| r.as_ref())
+                  .map(|r| meta.get(r).expect("bug"))
+                  .collect::<Vec<_>>();
+    let mut bitset = vec2[0].get_bit_set(res);
+    for &e in &vec2 {
+        bitset &= &e.get_bit_set(res);
+    }
+    for i in bitset {
+       let s = vec2.iter().fold(String::new(), |acc, &e| acc + &e.get(res, i) );
+       println!("{:?}", s);
+    }
+}
+
+
+impl<T: Component + Debug> GivesBitSet for MaskedStorage<T> {
+    fn get_bit_set(&self, res: &Resources) -> BitSet {
+        let storage = Storage::new(res.fetch(), self);
+        storage.mask().clone()
+    }
+    fn get(&self, res: &Resources, idx: u32) -> String {
+        let storage = Storage::new(res.fetch(), self);
+//        let raw: &UnprotectedStorage<T> = storage.unprotected_storage();
+        format!("{:?}", unsafe { storage.unprotected_storage().get(idx) })
+    }
+}
+
+pub trait GivesBitSet {
+    fn get_bit_set(&self, res: &Resources) -> BitSet;
+    fn get(&self, res: &Resources, idx: u32) -> String;
+}
+
+impl<T> CastFrom<T> for GivesBitSet
+    where T: GivesBitSet + 'static
+{
+    fn cast(t: &T) -> &Self { t }
+    fn cast_mut(t: &mut T) -> &mut Self { t }
+}
+
+/*
+impl Join for DynWrapper {
+    type Type = String;
+    type Value = T::Storage;
+    type Mask = BitSet;
+
+    unsafe fn open(self) -> (Self::Mask, Self::Value) {
+        unimplemented!()
+    }
+
+    unsafe fn get(value: &mut Self::Value, id: u32) -> Self::Type {
+        unimplemented!()
+    }
+}
+*/
+
 
 
 /*

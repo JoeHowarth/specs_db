@@ -23,12 +23,12 @@ mod fake_system;
 
 fn main() {
     let mut world = World::new();
-    let meta_serialize_table: MetaTable<Serialize> = MetaTable::new();
+    let meta_serialize_table: MetaTable<dyn Serialize> = MetaTable::new();
     let resource_table = ResourceTable::new();
 
-    world.add_resource(resource_table);
-    world.add_resource(meta_serialize_table);
-    world.add_resource(MetaTable::<GivesBitSet>::new());
+    world.insert(resource_table);
+    world.insert(meta_serialize_table);
+    world.insert(MetaTable::<dyn GivesBitSet<String>>::new());
     world.register::<Tile>();
     world.register::<Hill>();
 
@@ -41,19 +41,22 @@ fn main() {
     world.dyn_register_component::<Tile>("Tile");
 
     silly_join(&mut world);
-    test_dyn_component(&mut world.res);
-    test_dyn_join(&mut world.res);
+    test_dyn_component(&mut world);
+    test_dyn_join(&["Hill", "Tile"], &mut world);
 
     world.dyn_register(Id(54), "Id");
     world.dyn_register((), "Unit");
 
     let serializables = fetch_serializable_by_string(
         &["Id", "Unit"],
-        &world.res,
+        &world,
         |s| s.to_wire_format(),
     );
     serializables.iter()
                  .for_each(|s| { dbg!(s); });
+
+    hibitset::BitSet::new();
+
 }
 
 fn silly_join(world: &mut World) {
@@ -153,7 +156,7 @@ impl ResourceTable {
     }
 
     fn get(&self, name: &str) -> ResourceId {
-        *self.map.get(name).unwrap()
+        self.map.get(name).unwrap().clone()
     }
 }
 

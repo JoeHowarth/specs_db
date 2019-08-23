@@ -22,7 +22,8 @@ pub trait DynRegister {
 impl DynRegister for World {
     fn dyn_register<R: Resource + Serialize>(&mut self, mut r: R, name: &str) {
         {
-            let (mut meta, mut res_table): (WriteExpect<MetaTable<Serialize>>, WriteExpect<ResourceTable>) = SystemData::fetch(&mut self.res);
+            let (mut meta, mut res_table): (WriteExpect<MetaTable<dyn Serialize>>, WriteExpect<ResourceTable>) =
+                SystemData::fetch(self);
 
             meta.register(&mut r);
             res_table.register::<R>(name);
@@ -34,27 +35,27 @@ impl DynRegister for World {
         where C::Storage: Default
     {
         self.register::<C>();
-        self.res.fetch_mut::<MetaTable<Serialize>>().register(&*self.res.fetch::<MaskedStorage<C>>());
-        self.res.fetch_mut::<MetaTable<GivesBitSet>>().register(&*self.res.fetch::<MaskedStorage<C>>());
-        self.res.fetch_mut::<ResourceTable>().register::<MaskedStorage<C>>(name);
+        self.fetch_mut::<MetaTable<dyn Serialize>>().register(&*self.fetch::<MaskedStorage<C>>());
+        self.fetch_mut::<MetaTable<dyn GivesBitSet<String>>>().register(&*self.fetch::<MaskedStorage<C>>());
+        self.fetch_mut::<ResourceTable>().register::<MaskedStorage<C>>(name);
     }
 }
 
-pub fn fetch_serializable_by_string<T>(reads: &[&str], res: &Resources, f: fn(&Serialize) -> T) -> Vec<T> {
-    let (meta, res_table): (ReadExpect<MetaTable<Serialize>>, ReadExpect<ResourceTable>) = SystemData::fetch(res);
+pub fn fetch_serializable_by_string<T>(reads: &[&str], res: &Resources, f: fn(&dyn Serialize) -> T) -> Vec<T> {
+    let (meta, res_table): (ReadExpect<MetaTable<dyn Serialize>>, ReadExpect<ResourceTable>) = SystemData::fetch(res);
 
-    let mut xs: Vec<RefMut<Box<Resource>>> = reads
+    let mut xs: Vec<RefMut<Box<dyn Resource>>> = reads
         .into_iter()
         .map(|&s| res_table.get(s))
         .map(|id| res
-            .try_fetch_internal(id.0)
+            .try_fetch_internal(id)
             .expect("bug: the requested resource does not exist")
             .borrow_mut()
         ).collect();
 
     xs.iter_mut()
-      .map(|x: &mut RefMut<Box<Resource>>| x.as_ref())
-      .map(|r: &Resource| meta
+      .map(|x: &mut RefMut<Box<dyn Resource>>| x.as_ref())
+      .map(|r: &dyn Resource| meta
           .get(r)
           .expect("Not in meta_table"))
       .map(f)
@@ -63,10 +64,10 @@ pub fn fetch_serializable_by_string<T>(reads: &[&str], res: &Resources, f: fn(&S
 
 pub fn test_dyn_component(res: &mut Resources) -> String {
     let table = res.fetch::<ResourceTable>();
-    let meta = res.fetch::<MetaTable<Serialize>>();
+    let meta = res.fetch::<MetaTable<dyn Serialize>>();
 
     let hill = table.get("Hill");
-    let r = res.try_fetch_internal(hill.0)
+    let r = res.try_fetch_internal(hill)
                .expect("bug dyn")
                .borrow_mut();
     let r1 = r.as_ref();
@@ -74,11 +75,11 @@ pub fn test_dyn_component(res: &mut Resources) -> String {
     dbg!(t.component(res))
 }
 
-pub fn test_dyn_join(res: &mut Resources) {
+pub fn test_dyn_join(reads: &[&str], res: &mut Resources) {
     let table = res.fetch::<ResourceTable>();
-    let meta = res.fetch::<MetaTable<GivesBitSet>>();
-    let vec = ["Hill", "Tile"].iter().map(|&s| {
-        res.try_fetch_internal(table.get(s).0)
+    let meta = res.fetch::<MetaTable<dyn GivesBitSet<String>>>();
+    let vec = reads.iter().map(|&s| {
+        res.try_fetch_internal(table.get(s))
            .expect("bug")
            .borrow_mut()
     }).collect::<Vec<_>>();
@@ -89,6 +90,9 @@ pub fn test_dyn_join(res: &mut Resources) {
     for &e in &vec2 {
         bitset &= &e.get_bit_set(res);
     }
+    for x in (&bitset).join() {
+        dbg!(x);
+    }
     for i in bitset {
        let s = vec2.iter().fold(String::new(), |acc, &e| acc + &e.get(res, i) );
        println!("{:?}", s);
@@ -96,25 +100,24 @@ pub fn test_dyn_join(res: &mut Resources) {
 }
 
 
-impl<T: Component + Debug> GivesBitSet for MaskedStorage<T> {
-    fn get_bit_set(&self, res: &Resources) -> BitSet {
+impl<T: Component + Debug> GivesBitSet<String> for MaskedStorage<T> {
+    fn get_bit_set(&self, res: &World) -> BitSet {
         let storage = Storage::new(res.fetch(), self);
         storage.mask().clone()
     }
-    fn get(&self, res: &Resources, idx: u32) -> String {
+    fn get(&self, res: &World, idx: u32) -> String {
         let storage = Storage::new(res.fetch(), self);
-//        let raw: &UnprotectedStorage<T> = storage.unprotected_storage();
         format!("{:?}", unsafe { storage.unprotected_storage().get(idx) })
     }
 }
 
-pub trait GivesBitSet {
-    fn get_bit_set(&self, res: &Resources) -> BitSet;
-    fn get(&self, res: &Resources, idx: u32) -> String;
+pub trait GivesBitSet<T> {
+    fn get_bit_set(&self, res: &World) -> BitSet;
+    fn get(&self, res: &World, idx: u32) -> T;
 }
 
-impl<T> CastFrom<T> for GivesBitSet
-    where T: GivesBitSet + 'static
+unsafe impl<T, A> CastFrom<T> for dyn GivesBitSet<A>
+    where T: GivesBitSet<A> + 'static
 {
     fn cast(t: &T) -> &Self { t }
     fn cast_mut(t: &mut T) -> &mut Self { t }

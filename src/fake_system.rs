@@ -20,9 +20,8 @@ impl<'a> DynamicSystemData<'a> for FakeSystemData<'a> {
         let reads = accessor
             .reads
             .iter()
-            .map(|id| id.0)
             .map(|id| res
-                .try_fetch_internal(id)
+                .try_fetch_internal(id.clone())
                 .expect("bug: the requested resource does not exist")
                 .borrow()
             )
@@ -30,9 +29,8 @@ impl<'a> DynamicSystemData<'a> for FakeSystemData<'a> {
         let writes = accessor
             .writes
             .iter()
-            .map(|id| id.0)
             .map(|id| res
-                .try_fetch_internal(id)
+                .try_fetch_internal(id.clone())
                 .expect("bug: the requested resource does not exist")
                 .borrow_mut()
             )

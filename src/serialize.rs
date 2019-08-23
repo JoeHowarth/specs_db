@@ -1,16 +1,16 @@
 use std::borrow::ToOwned;
 use specs::shred::CastFrom;
 use specs::world::EntitiesRes;
-use specs::Resources;
+use specs::World;
 
 pub trait Serialize {
     fn to_wire_format(&self) -> String {
         "fake json!!".to_owned()
     }
-    fn component(&self, res: &Resources)-> String { "not_implemented".to_owned() }
+    fn component(&self, res: &World)-> String { "not_implemented".to_owned() }
 }
 
-impl<T> CastFrom<T> for Serialize
+unsafe impl<T> CastFrom<T> for dyn Serialize
     where T: Serialize + 'static
 {
     fn cast(t: &T) -> &Self { t }
